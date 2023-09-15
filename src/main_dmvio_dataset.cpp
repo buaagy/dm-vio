@@ -54,18 +54,17 @@
 #include "IOWrapper/Pangolin/PangolinDSOViewer.h"
 #include "IOWrapper/OutputWrapper/SampleOutputWrapper.h"
 
+using namespace dso;
+
 std::string gtFile = "";
 std::string source = "";
 std::string imuFile = "";
 
-bool reverse = false;
+bool reverse = false;     // 图像序列前后反转
 int start = 0;
 int end = 100000;
-int maxPreloadImages = 0; // If set we only preload if there are less images to be loade.
+int maxPreloadImages = 0; // 最大预加载图像数
 bool useSampleOutput = false;
-
-using namespace dso;
-
 
 dmvio::MainSettings mainSettings;
 dmvio::IMUCalibration imuCalibration;
@@ -88,14 +87,9 @@ void exitThread()
     while(true) pause();
 }
 
-
-
-
-
-
 void run(ImageFolderReader* reader, IOWrap::PangolinDSOViewer* viewer)
 {
-
+    // 判断是否需要光度标定文件
     if(setting_photometricCalibration > 0 && reader->getPhotometricGamma() == 0)
     {
         printf("ERROR: dont't have photometric calibation. Need to use commandline options mode=1 or mode=2 ");
@@ -106,9 +100,11 @@ void run(ImageFolderReader* reader, IOWrap::PangolinDSOViewer* viewer)
     int lstart = start;
     int lend = end;
     int linc = 1;
+    
+    // 图像序列前后反转
     if(reverse)
     {
-        assert(!setting_useIMU); // Reverse is not supported with IMU data at the moment!
+        assert(!setting_useIMU); // 如果使用IMU数据则不能前后反转
         printf("REVERSE!!!!");
         lstart = end - 1;
         if(lstart >= reader->getNumImages())
@@ -119,17 +115,17 @@ void run(ImageFolderReader* reader, IOWrap::PangolinDSOViewer* viewer)
 
 
     bool linearizeOperation = (mainSettings.playbackSpeed == 0);
-
     if(linearizeOperation && setting_minFramesBetweenKeyframes < 0)
     {
         setting_minFramesBetweenKeyframes = -setting_minFramesBetweenKeyframes;
         std::cout << "Using setting_minFramesBetweenKeyframes=" << setting_minFramesBetweenKeyframes
                   << " because of non-realtime mode." << std::endl;
     }
-
+    
+    // 初始化FullSystem
     FullSystem* fullSystem = new FullSystem(linearizeOperation, imuCalibration, imuSettings);
+    // 设置光度标定参数
     fullSystem->setGammaFunction(reader->getPhotometricGamma());
-
 
     if(viewer != 0)
     {
@@ -142,7 +138,8 @@ void run(ImageFolderReader* reader, IOWrap::PangolinDSOViewer* viewer)
         sampleOutPutWrapper.reset(new IOWrap::SampleOutputWrapper());
         fullSystem->outputWrapper.push_back(sampleOutPutWrapper.get());
     }
-
+    
+    // 计算显示的图像index
     std::vector<int> idsToPlay;
     std::vector<double> timesToPlayAt;
     for(int i = lstart; i >= 0 && i < reader->getNumImages() && linc * i < linc * lend; i += linc)
@@ -158,7 +155,8 @@ void run(ImageFolderReader* reader, IOWrap::PangolinDSOViewer* viewer)
             timesToPlayAt.push_back(timesToPlayAt.back() + fabs(tsThis - tsPrev) / mainSettings.playbackSpeed);
         }
     }
-
+    
+    // 如果超过最大预加载图像数,则不进行预加载操作
     if(mainSettings.preload && maxPreloadImages > 0)
     {
         if(reader->getNumImages() > maxPreloadImages)
@@ -167,7 +165,8 @@ void run(ImageFolderReader* reader, IOWrap::PangolinDSOViewer* viewer)
             mainSettings.preload = false;
         }
     }
-
+    
+    // 预加载所有图像
     std::vector<ImageAndExposure*> preloadedImages;
     if(mainSettings.preload)
     {
@@ -175,6 +174,7 @@ void run(ImageFolderReader* reader, IOWrap::PangolinDSOViewer* viewer)
         for(int ii = 0; ii < (int) idsToPlay.size(); ii++)
         {
             int i = idsToPlay[ii];
+            std::cout << "load image " << ii << ", index is " << i << std::endl;
             preloadedImages.push_back(reader->getImage(i));
         }
     }
@@ -183,30 +183,34 @@ void run(ImageFolderReader* reader, IOWrap::PangolinDSOViewer* viewer)
     gettimeofday(&tv_start, NULL);
     clock_t started = clock();
     double sInitializerOffset = 0;
-
+    // 判断是否存在ground-truth数据
     bool gtDataThere = reader->loadGTData(gtFile);
-
+    // 是否跳过了IMU数据
     bool imuDataSkipped = false;
+    // 跳过的IMU数据序列
     dmvio::IMUData skippedIMUData;
+    // 循环处理每帧图像
     for(int ii = 0; ii < (int) idsToPlay.size(); ii++)
     {
+        // 如果未初始化,则重置起始时间
         if(!fullSystem->initialized)    // if not initialized: reset start time.
         {
             gettimeofday(&tv_start, NULL);
             started = clock();
             sInitializerOffset = timesToPlayAt[ii];
         }
-
+        
+        // 获取当前帧的图像index
         int i = idsToPlay[ii];
-
-
+        
+        // 加载图像
         ImageAndExposure* img;
         if(mainSettings.preload)
             img = preloadedImages[ii];
         else
             img = reader->getImage(i);
-
-
+            
+        // 判断是否跳过当前帧
         bool skipFrame = false;
         if(mainSettings.playbackSpeed != 0)
         {
@@ -216,41 +220,51 @@ void run(ImageFolderReader* reader, IOWrap::PangolinDSOViewer* viewer)
                                                        (tv_now.tv_usec - tv_start.tv_usec) / (1000.0f * 1000.0f));
 
             if(sSinceStart < timesToPlayAt[ii])
+            {
                 usleep((int) ((timesToPlayAt[ii] - sSinceStart) * 1000 * 1000));
+            }
             else if(sSinceStart > timesToPlayAt[ii] + 0.5 + 0.1 * (ii % 2))
             {
                 printf("SKIPFRAME %d (play at %f, now it is %f)!\n", ii, timesToPlayAt[ii], sSinceStart);
                 skipFrame = true;
             }
         }
-
+        
+        // 读取ground-truth数据
         dmvio::GTData data;
         bool found = false;
         if(gtDataThere)
         {
             data = reader->getGTData(i, found);
         }
-
+        
+        // 如果使用IMU,则读取IMU数据
         std::unique_ptr<dmvio::IMUData> imuData;
         if(setting_useIMU)
         {
             imuData = std::make_unique<dmvio::IMUData>(reader->getIMUData(i));
         }
+        
+        // 如果不跳过当前帧
         if(!skipFrame)
         {
+            // 如果跳过了IMU数据,则插入跳过的IMU数据序列
             if(imuDataSkipped && imuData)
             {
                 imuData->insert(imuData->begin(), skippedIMUData.begin(), skippedIMUData.end());
                 skippedIMUData.clear();
                 imuDataSkipped = false;
             }
+            // 加入活跃帧
             fullSystem->addActiveFrame(img, i, imuData.get(), (gtDataThere && found) ? &data : 0);
+            // 加入ground-truth相机姿态
             if(gtDataThere && found && !disableAllDisplay)
             {
                 viewer->addGTCamPose(data.pose);
             }
         }else if(imuData)
         {
+            // 备份跳过的IMU数据序列
             imuDataSkipped = true;
             skippedIMUData.insert(skippedIMUData.end(), imuData->begin(), imuData->end());
         }
@@ -258,6 +272,7 @@ void run(ImageFolderReader* reader, IOWrap::PangolinDSOViewer* viewer)
 
         delete img;
 
+        // 如果初始化失败,则重置
         if(fullSystem->initFailed || setting_fullResetRequested)
         {
             if(ii < 250 || setting_fullResetRequested)
@@ -293,7 +308,7 @@ void run(ImageFolderReader* reader, IOWrap::PangolinDSOViewer* viewer)
     struct timeval tv_end;
     gettimeofday(&tv_end, NULL);
 
-
+    // 输出结果文件
     fullSystem->printResult(imuSettings.resultsPrefix + "result.txt", false, false, true);
     fullSystem->printResult(imuSettings.resultsPrefix + "resultKFs.txt", true, false, false);
     fullSystem->printResult(imuSettings.resultsPrefix + "resultScaled.txt", false, true, true);
@@ -347,6 +362,7 @@ void run(ImageFolderReader* reader, IOWrap::PangolinDSOViewer* viewer)
 
 int main(int argc, char** argv)
 {
+    // 设置地域信息
     setlocale(LC_ALL, "C");
 
 #ifdef DEBUG
@@ -357,7 +373,7 @@ int main(int argc, char** argv)
 
     auto settingsUtil = std::make_shared<dmvio::SettingsUtil>();
 
-    // Create Settings files.
+    // 创建设置文件
     imuSettings.registerArgs(*settingsUtil);
     imuCalibration.registerArgs(*settingsUtil);
     mainSettings.registerArgs(*settingsUtil);

@@ -21,39 +21,41 @@
 * along with DSO. If not, see <http://www.gnu.org/licenses/>.
 */
 
-
 #pragma once
 #include <cstring>
 #include <iostream>
 
-
 namespace dso
 {
-
-
 class ImageAndExposure
 {
 public:
 	EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
-	float* image;			// irradiance. between 0 and 256
-	int w,h;				// width and height;
-	double timestamp;
-	float exposure_time;	// exposure time in ms.
+	float* image;        // 辐照度图像,取值在0～256
+	int w,h;	         // 图像宽度,高度
+	double timestamp;    // 时间戳
+	float exposure_time; // 曝光时间,单位毫秒
+	
+	// 构造函数
 	inline ImageAndExposure(int w_, int h_, double timestamp_=0) : w(w_), h(h_), timestamp(timestamp_)
 	{
 		image = new float[w*h];
 		exposure_time=1;
 	}
+	
+	// 析构函数
 	inline ~ImageAndExposure()
 	{
 		delete[] image;
 	}
-
+	
+	// 复制曝光时间给其他图像
 	inline void copyMetaTo(ImageAndExposure &other)
 	{
 		other.exposure_time = exposure_time;
 	}
-
+	
+	// 深拷贝
 	inline ImageAndExposure* getDeepCopy()
 	{
 		ImageAndExposure* img = new ImageAndExposure(w,h,timestamp);
@@ -62,6 +64,4 @@ public:
 		return img;
 	}
 };
-
-
 }
