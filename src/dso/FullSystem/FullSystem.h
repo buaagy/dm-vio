@@ -41,7 +41,7 @@
 #include "OptimizationBackend/EnergyFunctional.h"
 #include "FullSystem/PixelSelector2.h"
 #include "IMU/IMUIntegration.hpp" // dm-vio新增
-#include "util/GTData.hpp"        // dm-vio新增
+#include "util/GTData.hpp"		  // dm-vio新增
 
 #include <math.h>
 #include "IMUInitialization/GravityInitializer.h"
@@ -256,10 +256,10 @@ namespace dso
 		float statistics_lastFineTrackRMSE;
 
 		// =================== changed by tracker-thread. protected by trackMutex ============
-		boost::mutex trackMutex;                   // tracking线程锁
+		boost::mutex trackMutex;				   // tracking线程锁
 		std::vector<FrameShell *> allFrameHistory; // 所有历史帧信息
-		std::vector<Sophus::SE3> gtPoses;          // ground-truth位姿
-		CoarseInitializer *coarseInitializer;      // 粗略初始化器
+		std::vector<Sophus::SE3> gtPoses;		   // ground-truth位姿
+		CoarseInitializer *coarseInitializer;	   // 粗略初始化器
 		Vec5 lastCoarseRMSE;
 
 		// ================== changed by mapper-thread. protected by mapMutex ===============

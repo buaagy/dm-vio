@@ -289,6 +289,11 @@ namespace dso
 		myfile.close();
 	}
 
+	/*
+	对新来的一帧进行跟踪,得到位姿和光度参数。
+	referenceToFrameHint为位姿提示。可以得到位姿提示时(通常时从IMU),不需要随机初始化。
+	不能得到位姿提示时,根据预设的运动模型,执行随机初始化。
+	*/
 	std::pair<Vec4, bool> FullSystem::trackNewCoarse(FrameHessian *fh, Sophus::SE3 *referenceToFrameHint)
 	{
 		dmvio::TimeMeasurement timeMeasurement(referenceToFrameHint ? "FullSystem::trackNewCoarse" : "FullSystem::trackNewCoarseNoIMU");
@@ -298,16 +303,17 @@ namespace dso
 		for (IOWrap::Output3DWrapper *ow : outputWrapper)
 			ow->pushLiveFrame(fh);
 
+		// 上帧FrameHessian
 		FrameHessian *lastF = coarseTracker->lastRef;
 
 		AffLight aff_last_2_l = AffLight(0, 0);
 
-		// Seems to contain poses reference_to_newframe.
+		// lastF_2_fh_tries存储上一帧到当前帧的各种可能的位姿变化量
 		std::vector<SE3, Eigen::aligned_allocator<SE3>> lastF_2_fh_tries;
 
+		// 可以得到位姿提示时(通常时从IMU),不需要随机初始化
 		if (referenceToFrameHint)
 		{
-			// We got a hint (typically from IMU) where our pose is, so we don't need the random initializations below.
 			lastF_2_fh_tries.push_back(*referenceToFrameHint);
 			{
 				// lock on global pose consistency (probably we don't need this for AffineLight, but just to make sure).
@@ -331,18 +337,22 @@ namespace dso
 			}
 		}
 
+		// 不能得到位姿提示时,根据预设的运动模型,执行随机初始化
 		if (!referenceToFrameHint)
 		{
+			// 当历史帧数=2时
 			if (allFrameHistory.size() == 2)
 				for (unsigned int i = 0; i < lastF_2_fh_tries.size(); i++)
 					lastF_2_fh_tries.push_back(SE3());
 			else
 			{
-				FrameShell *slast = allFrameHistory[allFrameHistory.size() - 2];
-				FrameShell *sprelast = allFrameHistory[allFrameHistory.size() - 3];
-				SE3 slast_2_sprelast;
-				SE3 lastF_2_slast;
-				{ // lock on global pose consistency!
+				// 当历史帧数>2时
+				FrameShell *slast = allFrameHistory[allFrameHistory.size() - 2];	// 上上帧
+				FrameShell *sprelast = allFrameHistory[allFrameHistory.size() - 3]; // 上上上帧
+				SE3 slast_2_sprelast;												// 上上帧->上上上帧的SE3
+				SE3 lastF_2_slast;													// 上帧->上上帧的SE3
+				{
+					// lock on global pose consistency!
 					boost::unique_lock<boost::mutex> crlock(shellPoseMutex);
 					slast_2_sprelast = sprelast->camToWorld.inverse() * slast->camToWorld;
 					lastF_2_slast = slast->camToWorld.inverse() * lastF->shell->camToWorld;
@@ -350,6 +360,7 @@ namespace dso
 				}
 				SE3 fh_2_slast = slast_2_sprelast; // assumed to be the same as fh_2_slast.
 
+				// 尝试各种平移运动(匀速/倍速/半速/零速)
 				// get last delta-movement.
 				lastF_2_fh_tries.push_back(fh_2_slast.inverse() * lastF_2_slast);						 // assume constant motion.
 				lastF_2_fh_tries.push_back(fh_2_slast.inverse() * fh_2_slast.inverse() * lastF_2_slast); // assume double motion (frame skipped)
@@ -357,6 +368,7 @@ namespace dso
 				lastF_2_fh_tries.push_back(lastF_2_slast);												 // assume zero motion.
 				lastF_2_fh_tries.push_back(SE3());														 // assume zero motion FROM KF.
 
+				// 尝试各种旋转运动(26种)
 				// just try a TON of different initializations (all rotations). In the end,
 				// if they don't work they will only be tried on the coarsest level, which is super fast anyway.
 				// also, if tracking rails here we loose, so we really, really want to avoid that.
@@ -390,6 +402,7 @@ namespace dso
 					lastF_2_fh_tries.push_back(fh_2_slast.inverse() * lastF_2_slast * SE3(Sophus::Quaterniond(1, rotDelta, rotDelta, rotDelta), Vec3(0, 0, 0)));	// assume constant motion.
 				}
 
+				// 如果之前3帧中有一帧的位姿无效,则清除lastF_2_fh_tries
 				if (!slast->poseValid || !sprelast->poseValid || !lastF->shell->poseValid)
 				{
 					lastF_2_fh_tries.clear();
@@ -411,10 +424,12 @@ namespace dso
 		Vec5 achievedRes = Vec5::Constant(NAN);
 		bool haveOneGood = false;
 		int tryIterations = 0;
+		// 逐个尝试
 		for (unsigned int i = 0; i < lastF_2_fh_tries.size(); i++)
 		{
 			AffLight aff_g2l_this = aff_last_2_l;
 			SE3 lastF_2_fh_this = lastF_2_fh_tries[i];
+			// 跟踪是否良好
 			bool trackingIsGood = coarseTracker->trackNewestCoarse(
 				fh, lastF_2_fh_this, aff_g2l_this,
 				pyrLevelsUsed - 1,
@@ -450,6 +465,7 @@ namespace dso
 					   coarseTracker->lastResiduals[4]);
 			}
 
+			// 如果跟踪正常,并且0层残差比当前最小残差还小,则保留位姿,并保存最好的每一层的能量值
 			// do we have a new winner?
 			if (trackingIsGood && std::isfinite((float)coarseTracker->lastResiduals[0]) && !(coarseTracker->lastResiduals[0] >= achievedRes[0]))
 			{
@@ -473,6 +489,7 @@ namespace dso
 				break;
 		}
 
+		// 跟踪失败,没有任何一个运动假设的跟踪结果正常
 		if (!haveOneGood)
 		{
 			printf("BIG ERROR! tracking failed entirely. Take predicted pose and hope we may somehow recover.\n");
@@ -877,7 +894,7 @@ namespace dso
 		fh->makeImages(image->image, &Hcalib);
 
 		measureInit.end();
-		
+
 		// 初始化
 		if (!initialized)
 		{
@@ -902,7 +919,7 @@ namespace dso
 				// 如果使用IMU
 				if (setting_useIMU)
 				{
-				        // 加入IMU数据到BA
+					// 加入IMU数据到BA
 					imuIntegration.addIMUDataToBA(*imuData);
 					Sophus::SE3 imuToWorld = gravityInit.addMeasure(*imuData, Sophus::SE3d());
 					if (initDone)
@@ -943,18 +960,20 @@ namespace dso
 			}
 			return;
 		}
-		else // 前端操作
+		else
 		{
+			// 前端操作
 			// Coarse tracking（在视觉初始化成功后）
 			dmvio::TimeMeasurement coarseTrackingTime("fullCoarseTracking");
 			int lastFrameId = -1;
 
-			// =========================== SWAP tracking reference?. =========================
+			// CoarseTracker互换
 			bool trackingRefChanged = false;
 			if (coarseTracker_forNewKF->refFrameID > coarseTracker->refFrameID)
 			{
 				dmvio::TimeMeasurement referenceSwapTime("swapTrackingRef");
 				boost::unique_lock<boost::mutex> crlock(coarseTrackerSwapMutex);
+				// 互换
 				CoarseTracker *tmp = coarseTracker;
 				coarseTracker = coarseTracker_forNewKF;
 				coarseTracker_forNewKF = tmp;
@@ -992,17 +1011,19 @@ namespace dso
 				imuIntegration.addIMUDataToBA(*imuData);
 			}
 
+			// 使用确定的运动模型对新来的一帧进行跟踪,得到位姿和光度参数
 			std::pair<Vec4, bool> pair = trackNewCoarse(fh, referenceToFramePassed);
 			dso::Vec4 tres = std::move(pair.first);
 			bool forceNoKF = !pair.second; // If coarse tracking was bad don't make KF.
 			bool forceKF = false;
+			// 判断是否跟踪失败
 			if (!std::isfinite((double)tres[0]) || !std::isfinite((double)tres[1]) || !std::isfinite((double)tres[2]) || !std::isfinite((double)tres[3]))
 			{
 				if (setting_useIMU)
 				{
 					// If completely Nan, don't force noKF!
 					forceNoKF = false;
-					forceKF = true; // actually we force a KF in that situation as there are no points to track.
+					forceKF = true; // 当没有点可以跟踪时,强制创建一个关键帧
 				}
 				else
 				{
@@ -1012,8 +1033,10 @@ namespace dso
 				}
 			}
 
+			// 判断是否加入关键帧
 			double timeSinceLastKeyframe = fh->shell->timestamp - allKeyFramesHistory.back()->timestamp;
 			bool needToMakeKF = false;
+			// 如果设置了每秒几幅关键帧
 			if (setting_keyframesPerSecond > 0)
 			{
 				needToMakeKF = allFrameHistory.size() == 1 ||
@@ -1024,7 +1047,7 @@ namespace dso
 				Vec2 refToFh = AffLight::fromToVecExposure(coarseTracker->lastRef->ab_exposure, fh->ab_exposure,
 														   coarseTracker->lastRef_aff_g2l, fh->shell->aff_g2l);
 
-				// BRIGHTNESS CHECK
+				// 创建关键帧的条件:平移+旋转变化量较大,光度变化量较大,误差能量变化量较大(最初的两倍)
 				needToMakeKF = allFrameHistory.size() == 1 ||
 							   setting_kfGlobalWeight * setting_maxShiftWeightT * sqrtf((double)tres[1]) / (wG[0] + hG[0]) +
 									   setting_kfGlobalWeight * setting_maxShiftWeightR * sqrtf((double)tres[2]) / (wG[0] + hG[0]) +
@@ -1037,9 +1060,11 @@ namespace dso
 
 				if (needToMakeKF && !setting_debugout_runquiet)
 				{
-					std::cout << "Time since last keyframe: " << timeSinceLastKeyframe << std::endl;
+					std::cout << "make KF, time since last KF: " << timeSinceLastKeyframe << std::endl;
 				}
 			}
+
+			// 如果平移量很小,则强制不创建关键帧
 			double transNorm = fh->shell->camToTrackingRef.translation().norm() * imuIntegration.getCoarseScale();
 			if (imuIntegration.isCoarseInitialized() && transNorm < setting_forceNoKFTranslationThresh)
 			{
@@ -1051,8 +1076,10 @@ namespace dso
 				needToMakeKF = false;
 			}
 
+			// 比较间隔帧数
 			if (needToMakeKF)
 			{
+				// 计算当前关键帧与上一关键帧之间间隔的帧数
 				int prevKFId = fh->shell->trackingRef->id;
 				// In non-RT mode this will always be accurate, but in RT mode the printout in makeKeyframe is correct (because some of these KFs do not end up getting created).
 				int framesBetweenKFs = fh->shell->id - prevKFId - 1;
@@ -1091,6 +1118,7 @@ namespace dso
 			for (IOWrap::Output3DWrapper *ow : outputWrapper)
 				ow->publishCamPose(fh->shell, &Hcalib);
 
+			// 调用deliverTrackedFrame,创建关键帧或非关键帧
 			lock.unlock();
 			timeLastStuff.end();
 			coarseTrackingTime.end();
@@ -1098,7 +1126,8 @@ namespace dso
 			return;
 		}
 	}
-	
+
+	// 将跟踪到的帧传给建图线程,设置成关键帧或非关键帧
 	void FullSystem::deliverTrackedFrame(FrameHessian *fh, bool needKF)
 	{
 		dmvio::TimeMeasurement timeMeasurement("deliverTrackedFrame");
@@ -1134,6 +1163,7 @@ namespace dso
 			}
 		}
 
+		// 顺序执行
 		if (linearizeOperation)
 		{
 			if (goStepByStep && lastRefStopID != coarseTracker->refFrameID)
@@ -1158,14 +1188,18 @@ namespace dso
 				{
 					imuIntegration.keyframeCreated(fh->shell->id);
 				}
+				// 创建关键帧
 				makeKeyFrame(fh);
 			}
 			else
+			{
+				// 创建非关键帧
 				makeNonKeyFrame(fh);
+			}
 		}
 		else
 		{
-			boost::unique_lock<boost::mutex> lock(trackMapSyncMutex);
+			boost::unique_lock<boost::mutex> lock(trackMapSyncMutex); // 跟踪和建图同步锁
 			unmappedTrackedFrames.push_back(fh);
 
 			// If the prepared KF is still in the queue right now the current frame will become a KF instead.
@@ -1496,11 +1530,17 @@ namespace dso
 		}
 	}
 
+	/*
+	从初始化中提取出信息,用于跟踪。
+	第一帧是firstFrame,第七帧是newFrame,从CoarseInitializer中抽取出2000个点作为firstFrame的pointHessians。
+	设置的逆深度有CoarseIntiailzier::trackFrame中计算出来的iR和idepth,而这里使用了rescaleFactor这个局部变量,保证所有iR的均值为1。
+	iR设置的是PointHessian的idepth,而idepth设置的是PointHessian的idepth_zero(缩放了scale倍的固定线性化点逆深度),idepth_zero相当于估计的真值,用于计算误差。
+	*/
 	void FullSystem::initializeFromInitializer(FrameHessian *newFrame)
 	{
 		boost::unique_lock<boost::mutex> lock(mapMutex);
 
-		// add firstframe.
+		// 把第一帧设置成关键帧,加入队列,加入EnergyFunctional
 		FrameHessian *firstFrame = coarseInitializer->firstFrame;
 		firstFrame->idx = frameHessians.size();
 		frameHessians.push_back(firstFrame);

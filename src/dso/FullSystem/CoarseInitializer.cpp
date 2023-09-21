@@ -775,7 +775,7 @@ namespace dso
 			}
 		}
 	}
-	
+
 	/*
 	计算图像金字塔的每一层内参,再针对不同层数选择大梯度像素。
 	第0层比较复杂,按照1d/2d/4d大小的block选择3个层次的像素;
@@ -786,7 +786,7 @@ namespace dso
 	*/
 	void CoarseInitializer::setFirst(CalibHessian *HCalib, FrameHessian *newFrameHessian)
 	{
-
+		// 计算金字塔每层的相机参数
 		makeK(HCalib);
 		firstFrame = newFrameHessian;
 
@@ -795,16 +795,18 @@ namespace dso
 		float *statusMap = new float[w[0] * h[0]];
 		bool *statusMapB = new bool[w[0] * h[0]];
 
-		float densities[] = {0.03, 0.05, 0.15, 0.5, 1};
+		float densities[] = {0.03, 0.05, 0.15, 0.5, 1}; // 各层的点密度
 		for (int lvl = 0; lvl < pyrLevelsUsed; lvl++)
 		{
-			sel.currentPotential = 3;
+			// 计算图像金字塔各层像素数
+			sel.currentPotential = 3; // 网格尺寸为3*3
 			int npts;
 			if (lvl == 0)
 				npts = sel.makeMaps(firstFrame, statusMap, densities[lvl] * w[0] * h[0], 1, false, 2);
 			else
 				npts = makePixelStatus(firstFrame->dIp[lvl], statusMapB, w[lvl], h[lvl], densities[lvl] * w[0] * h[0]);
-
+				
+			// 如果点非空,则释放空间后创建新的
 			if (points[lvl] != 0)
 				delete[] points[lvl];
 			points[lvl] = new Pnt[npts];
@@ -832,6 +834,7 @@ namespace dso
 
 						Eigen::Vector3f *cpt = firstFrame->dIp[lvl] + x + y * w[lvl];
 						float sumGrad2 = 0;
+						// 计算pattern内像素梯度和
 						for (int idx = 0; idx < patternNum; idx++)
 						{
 							int dx = patternP[idx][0];
@@ -945,6 +948,7 @@ namespace dso
 		std::swap<Vec10f *>(JbBuffer, JbBuffer_new);
 	}
 
+	// 计算金字塔每层的相机参数
 	void CoarseInitializer::makeK(CalibHessian *HCalib)
 	{
 		w[0] = wG[0];

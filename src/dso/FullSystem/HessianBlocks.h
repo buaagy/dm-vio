@@ -114,9 +114,9 @@ namespace dso
 
 		bool addCamPrior;
 
-		int frameID; // 所有关键帧的序号(FrameShell),incremental ID for keyframes only!
+		int frameID;				// 所有关键帧的序号(FrameShell),incremental ID for keyframes only!
 		static int instanceCounter; // 计数器
-		int idx; // 激活关键帧的序号(FrameHessian)
+		int idx;					// 激活关键帧的序号(FrameHessian)
 
 		// Photometric Calibration Stuff
 		float frameEnergyTH; // set dynamically depending on tracking residual

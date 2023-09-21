@@ -128,7 +128,7 @@ namespace dso
 	*/
 	void FrameHessian::makeImages(float *color, CalibHessian *HCalib)
 	{
-                // 创建dIp和absSquaredGrad
+		// 创建dIp和absSquaredGrad
 		for (int i = 0; i < pyrLevelsUsed; i++)
 		{
 			dIp[i] = new Eigen::Vector3f[wG[i] * hG[i]];
@@ -141,14 +141,14 @@ namespace dso
 		int h = hG[0];
 		for (int i = 0; i < w * h; i++)
 			dI[i][0] = color[i];
-		
+
 		// 逐层计算
 		for (int lvl = 0; lvl < pyrLevelsUsed; lvl++)
 		{
 			int wl = wG[lvl], hl = hG[lvl];
-			Eigen::Vector3f *dI_l = dIp[lvl];\
+			Eigen::Vector3f *dI_l = dIp[lvl];
 			float *dabs_l = absSquaredGrad[lvl];
-			
+
 			// 计算图像
 			if (lvl > 0)
 			{
@@ -165,7 +165,7 @@ namespace dso
 													   dI_lm[2 * x + 1 + 2 * y * wlm1 + wlm1][0]);
 					}
 			}
-			
+
 			// 计算x和y方向梯度,xy方向梯度的平方和
 			for (int idx = wl; idx < wl * (hl - 1); idx++)
 			{

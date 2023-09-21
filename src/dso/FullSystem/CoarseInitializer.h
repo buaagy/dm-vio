@@ -101,6 +101,7 @@ public:
 	FrameHessian* newFrame;
 private:
 
+        // 以下为各种相机内参
 	Mat33 K[PYR_LEVELS];
 	Mat33 Ki[PYR_LEVELS];
 	double fx[PYR_LEVELS];
